@@ -1,18 +1,17 @@
 /**
  * ========================================================
  *   WESTJET APPLICATIONS BOT - index.js (discord.js v14)
+ *   Version DM : le bot pose les 10 questions une par une
+ *   directement en message privé.
  * ========================================================
  *
- * Panel de candidatures avec 5 postes :
- *   Pilot, Cabin Crew, Check-in Agent, ATC, Server Moderator
- *
- * Chaque poste a 10 questions, réparties en 2 formulaires
- * (Discord limite un modal à 5 champs max, donc 2 modals
- * s'enchaînent automatiquement).
- *
- * Les candidatures complètes sont postées dans un channel de
- * review avec des boutons Accept / Deny (staff only). Le candidat
- * reçoit un DM avec la décision.
+ * Flow :
+ * 1. Le membre clique sur un poste dans le panel (menu déroulant)
+ * 2. Le bot lui envoie un DM et pose les 10 questions, une par une
+ *    (il attend la réponse avant de poser la suivante)
+ * 3. Une fois terminé, la candidature est postée dans le channel
+ *    de review avec les boutons Accept / Deny
+ * 4. Le candidat reçoit un DM avec la décision finale
  *
  * ========================================================
  *   VARIABLES D'ENVIRONNEMENT REQUISES
@@ -36,20 +35,31 @@
 const {
   Client,
   GatewayIntentBits,
+  Partials,
   Events,
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
   StringSelectMenuBuilder,
   PermissionFlagsBits,
+  MessageFlags,
   REST,
   Routes,
   SlashCommandBuilder,
 } = require("discord.js");
+const http = require("http");
+
+// ============== SERVEUR HTTP FACTICE (pour Render) ==============
+const PORT = process.env.PORT || 3000;
+http
+  .createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("WestJet Applications Bot is running.");
+  })
+  .listen(PORT, () => {
+    console.log(`🌐 Dummy HTTP server listening on port ${PORT} (for Render)`);
+  });
 
 // ============== CONFIGURATION (variables d'environnement) ==============
 function loadConfig() {
@@ -78,117 +88,95 @@ function loadConfig() {
 }
 
 // ============== DÉFINITION DES POSTES / QUESTIONS ==============
-// style: "short" ou "paragraph"
 const APPLICATIONS = {
   pilot: {
     label: "Pilot",
     emoji: "✈️",
     questions: [
-      { id: "q1", label: "Roblox Username", style: "short" },
-      { id: "q2", label: "Age", style: "short" },
-      { id: "q3", label: "Timezone (GMT)", style: "short" },
-      { id: "q4", label: "Flight hours in PTFS", style: "short" },
-      { id: "q5", label: "Preferred aircraft", style: "short" },
-      { id: "q6", label: "Do you know WestJet SOPs?", style: "paragraph" },
-      { id: "q7", label: "Describe an emergency landing", style: "paragraph" },
-      { id: "q8", label: "Hours/week available", style: "short" },
-      { id: "q9", label: "Prior aviation experience", style: "paragraph" },
-      { id: "q10", label: "Why join WestJet as a pilot?", style: "paragraph" },
+      "What is your Roblox username?",
+      "What is your age?",
+      "What is your timezone (GMT)?",
+      "How many flight hours do you have in PTFS?",
+      "What aircraft are you most comfortable flying?",
+      "Do you know WestJet's SOPs? Explain briefly.",
+      "Describe how you'd handle an emergency landing.",
+      "How many hours per week can you fly for WestJet?",
+      "Do you have prior aviation experience in other servers?",
+      "Why do you want to join WestJet as a pilot?",
     ],
   },
   cabincrew: {
     label: "Cabin Crew",
     emoji: "🧑‍✈️",
     questions: [
-      { id: "q1", label: "Roblox Username", style: "short" },
-      { id: "q2", label: "Age", style: "short" },
-      { id: "q3", label: "Timezone (GMT)", style: "short" },
-      { id: "q4", label: "Why Cabin Crew?", style: "paragraph" },
-      { id: "q5", label: "Handling an upset passenger", style: "paragraph" },
-      { id: "q6", label: "Familiar with safety announcements?", style: "paragraph" },
-      { id: "q7", label: "Hours/week available", style: "short" },
-      { id: "q8", label: "Prior cabin crew experience", style: "paragraph" },
-      { id: "q9", label: "Describe your communication skills", style: "paragraph" },
-      { id: "q10", label: "Comfortable communicating in English?", style: "short" },
+      "What is your Roblox username?",
+      "What is your age?",
+      "What is your timezone (GMT)?",
+      "Why do you want to be Cabin Crew?",
+      "How would you handle an upset passenger?",
+      "Are you familiar with in-flight safety announcements?",
+      "How many hours per week can you be active?",
+      "Do you have prior cabin crew experience?",
+      "Describe your communication / customer service skills.",
+      "Are you comfortable communicating in English?",
     ],
   },
   checkin: {
     label: "Check-in Agent",
     emoji: "🛎️",
     questions: [
-      { id: "q1", label: "Roblox Username", style: "short" },
-      { id: "q2", label: "Age", style: "short" },
-      { id: "q3", label: "Timezone (GMT)", style: "short" },
-      { id: "q4", label: "Why Check-in Agent?", style: "paragraph" },
-      { id: "q5", label: "Handling invalid ID/ticket", style: "paragraph" },
-      { id: "q6", label: "Familiar with check-in process?", style: "paragraph" },
-      { id: "q7", label: "Hours/week available", style: "short" },
-      { id: "q8", label: "Prior ground staff experience", style: "paragraph" },
-      { id: "q9", label: "How do you handle rush/multitasking?", style: "paragraph" },
-      { id: "q10", label: "Give an example of your patience", style: "paragraph" },
+      "What is your Roblox username?",
+      "What is your age?",
+      "What is your timezone (GMT)?",
+      "Why do you want to be a Check-in Agent?",
+      "How would you handle a passenger with an invalid ticket/ID?",
+      "Are you familiar with the check-in process?",
+      "How many hours per week can you be active?",
+      "Do you have prior ground staff experience?",
+      "How do you handle multitasking during busy periods?",
+      "Give an example that shows you're patient and detail-oriented.",
     ],
   },
   atc: {
     label: "ATC",
     emoji: "🗼",
     questions: [
-      { id: "q1", label: "Roblox Username", style: "short" },
-      { id: "q2", label: "Age", style: "short" },
-      { id: "q3", label: "Timezone (GMT)", style: "short" },
-      { id: "q4", label: "Prior ATC experience", style: "paragraph" },
-      { id: "q5", label: "Familiar with ATC phraseology?", style: "paragraph" },
-      { id: "q6", label: "Two aircraft, same runway - action?", style: "paragraph" },
-      { id: "q7", label: "Hours/week available", style: "short" },
-      { id: "q8", label: "Rate ATC knowledge (1-10) + explain", style: "paragraph" },
-      { id: "q9", label: "Handling a pilot emergency declare", style: "paragraph" },
-      { id: "q10", label: "Why join the ATC team?", style: "paragraph" },
+      "What is your Roblox username?",
+      "What is your age?",
+      "What is your timezone (GMT)?",
+      "Do you have prior ATC experience? Where?",
+      "Are you familiar with standard ATC phraseology?",
+      "Two aircraft request the same runway at once — what do you do?",
+      "How many hours per week can you be active as ATC?",
+      "Rate your ATC knowledge from 1-10 and explain.",
+      "Describe how you'd handle a pilot declaring an emergency.",
+      "Why do you want to join the WestJet ATC team?",
     ],
   },
   moderator: {
     label: "Server Moderator",
     emoji: "🛡️",
     questions: [
-      { id: "q1", label: "Discord Username", style: "short" },
-      { id: "q2", label: "Age", style: "short" },
-      { id: "q3", label: "Timezone (GMT)", style: "short" },
-      { id: "q4", label: "Prior moderation experience", style: "paragraph" },
-      { id: "q5", label: "Handling a repeat rule-breaker", style: "paragraph" },
-      { id: "q6", label: "Hours/week available", style: "short" },
-      { id: "q7", label: "How do you de-escalate a conflict?", style: "paragraph" },
-      { id: "q8", label: "Familiar with Discord ToS?", style: "short" },
-      { id: "q9", label: "Why be a Server Moderator?", style: "paragraph" },
-      { id: "q10", label: "Describe a difficult decision you made", style: "paragraph" },
+      "What is your Discord username?",
+      "What is your age?",
+      "What is your timezone (GMT)?",
+      "Do you have prior moderation experience? Where?",
+      "How would you handle a member repeatedly breaking rules?",
+      "How many hours per week can you moderate?",
+      "How would you de-escalate a conflict between two members?",
+      "Are you familiar with Discord's ToS and community guidelines?",
+      "Why do you want to be a Server Moderator for WestJet?",
+      "Describe a difficult moderation decision you've had to make.",
     ],
   },
 };
 
-// Stockage temporaire des réponses du 1er formulaire, en attendant le 2e
-// clé: `${userId}_${roleKey}`
-const pendingApplications = new Map();
+// Empêche un membre de démarrer 2 candidatures en même temps
+const activeApplications = new Set();
 
 function isStaff(interaction, STAFF_ROLE_ID) {
   if (interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return true;
   return interaction.member.roles.cache.has(STAFF_ROLE_ID);
-}
-
-function buildModal(roleKey, part, questions) {
-  const modal = new ModalBuilder()
-    .setCustomId(`apply_m${part}_${roleKey}`)
-    .setTitle(`${APPLICATIONS[roleKey].label} Application (${part}/2)`);
-
-  const slice = part === 1 ? questions.slice(0, 5) : questions.slice(5, 10);
-
-  slice.forEach((q) => {
-    const input = new TextInputBuilder()
-      .setCustomId(q.id)
-      .setLabel(q.label)
-      .setStyle(q.style === "paragraph" ? TextInputStyle.Paragraph : TextInputStyle.Short)
-      .setRequired(true)
-      .setMaxLength(q.style === "paragraph" ? 1000 : 200);
-    modal.addComponents(new ActionRowBuilder().addComponents(input));
-  });
-
-  return modal;
 }
 
 function buildPanelRow() {
@@ -204,6 +192,48 @@ function buildPanelRow() {
         }))
       )
   );
+}
+
+// Pose les questions une par une en DM et renvoie les réponses,
+// ou null si le membre n'a pas répondu à temps / a annulé.
+async function runDmInterview(dmChannel, user, app) {
+  const answers = [];
+
+  await dmChannel.send(
+    `👋 Hey ${user.username}! Let's start your **${app.label}** application for WestJet.\n` +
+      `I'll ask you ${app.questions.length} questions, one at a time. Just reply in this DM.\n` +
+      `You have 10 minutes per question. Type **cancel** anytime to stop.`
+  );
+
+  for (let i = 0; i < app.questions.length; i++) {
+    await dmChannel.send(`**Question ${i + 1}/${app.questions.length}:** ${app.questions[i]}`);
+
+    const collected = await dmChannel
+      .awaitMessages({
+        filter: (m) => m.author.id === user.id,
+        max: 1,
+        time: 10 * 60 * 1000,
+        errors: ["time"],
+      })
+      .catch(() => null);
+
+    if (!collected || collected.size === 0) {
+      await dmChannel.send("⏱️ You took too long to respond. Application cancelled — feel free to start again.");
+      return null;
+    }
+
+    const reply = collected.first().content.trim();
+
+    if (reply.toLowerCase() === "cancel") {
+      await dmChannel.send("❌ Application cancelled.");
+      return null;
+    }
+
+    answers.push(reply);
+  }
+
+  await dmChannel.send("✅ All done! Your application has been submitted for review. Good luck!");
+  return answers;
 }
 
 // ============== DÉPLOIEMENT DES SLASH COMMANDS ==============
@@ -231,7 +261,13 @@ async function deployCommands(TOKEN, CLIENT_ID, GUILD_ID) {
   }
 
   const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMembers,
+      GatewayIntentBits.DirectMessages,
+      GatewayIntentBits.MessageContent,
+    ],
+    partials: [Partials.Channel, Partials.Message],
   });
 
   client.once(Events.ClientReady, (c) => {
@@ -243,21 +279,24 @@ async function deployCommands(TOKEN, CLIENT_ID, GUILD_ID) {
       // ---------- /applypanel ----------
       if (interaction.isChatInputCommand() && interaction.commandName === "applypanel") {
         if (!isStaff(interaction, STAFF_ROLE_ID)) {
-          return interaction.reply({ content: "❌ You don't have permission to use this command.", ephemeral: true });
+          return interaction.reply({
+            content: "❌ You don't have permission to use this command.",
+            flags: MessageFlags.Ephemeral,
+          });
         }
 
         const embed = new EmbedBuilder()
           .setTitle("WestJet Applications")
           .setDescription(
-            "Interested in joining the WestJet team? Select a position below to start your application.\n\n" +
+            "Interested in joining the WestJet team? Select a position below.\n\n" +
               "✈️ **Pilot**\n🧑‍✈️ **Cabin Crew**\n🛎️ **Check-in Agent**\n🗼 **ATC**\n🛡️ **Server Moderator**\n\n" +
-              "You'll be asked 10 questions in total, split into two short forms."
+              "The bot will DM you 10 questions, one at a time. Make sure your DMs are open!"
           )
           .setColor(0x1abc9c)
           .setFooter({ text: "WestJet | Applications" });
 
         await interaction.channel.send({ embeds: [embed], components: [buildPanelRow()] });
-        return interaction.reply({ content: "✅ Panel posted.", ephemeral: true });
+        return interaction.reply({ content: "✅ Panel posted.", flags: MessageFlags.Ephemeral });
       }
 
       // ---------- SELECT MENU : choix du poste ----------
@@ -266,79 +305,77 @@ async function deployCommands(TOKEN, CLIENT_ID, GUILD_ID) {
         const app = APPLICATIONS[roleKey];
         if (!app) return;
 
-        const modal = buildModal(roleKey, 1, app.questions);
-        return interaction.showModal(modal);
-      }
+        if (activeApplications.has(interaction.user.id)) {
+          return interaction.reply({
+            content: "⚠️ You already have an application in progress. Check your DMs.",
+            flags: MessageFlags.Ephemeral,
+          });
+        }
 
-      // ---------- MODAL SUBMIT : formulaire 1/2 ----------
-      if (interaction.isModalSubmit() && interaction.customId.startsWith("apply_m1_")) {
-        const roleKey = interaction.customId.replace("apply_m1_", "");
-        const app = APPLICATIONS[roleKey];
-        if (!app) return;
+        let dmChannel;
+        try {
+          dmChannel = await interaction.user.createDM();
+          await dmChannel.send("Starting your application...");
+        } catch {
+          return interaction.reply({
+            content: "❌ I can't DM you. Please enable direct messages from server members and try again.",
+            flags: MessageFlags.Ephemeral,
+          });
+        }
 
-        const answers = {};
-        app.questions.slice(0, 5).forEach((q) => {
-          answers[q.id] = interaction.fields.getTextInputValue(q.id);
+        await interaction.reply({
+          content: `📩 Check your DMs — I've started your **${app.label}** application!`,
+          flags: MessageFlags.Ephemeral,
         });
 
-        pendingApplications.set(`${interaction.user.id}_${roleKey}`, answers);
+        activeApplications.add(interaction.user.id);
 
-        const modal2 = buildModal(roleKey, 2, app.questions);
-        return interaction.showModal(modal2);
-      }
+        try {
+          const answers = await runDmInterview(dmChannel, interaction.user, app);
+          if (!answers) return; // annulé / timeout
 
-      // ---------- MODAL SUBMIT : formulaire 2/2 ----------
-      if (interaction.isModalSubmit() && interaction.customId.startsWith("apply_m2_")) {
-        const roleKey = interaction.customId.replace("apply_m2_", "");
-        const app = APPLICATIONS[roleKey];
-        if (!app) return;
+          const embed = new EmbedBuilder()
+            .setTitle(`New ${app.label} Application`)
+            .setDescription(`Applicant: <@${interaction.user.id}> (${interaction.user.tag})`)
+            .setColor(0x3498db)
+            .setTimestamp();
 
-        const key = `${interaction.user.id}_${roleKey}`;
-        const answers1 = pendingApplications.get(key) || {};
-        pendingApplications.delete(key);
+          app.questions.forEach((q, i) => {
+            embed.addFields({ name: q, value: answers[i]?.slice(0, 1024) || "N/A" });
+          });
 
-        const answers2 = {};
-        app.questions.slice(5, 10).forEach((q) => {
-          answers2[q.id] = interaction.fields.getTextInputValue(q.id);
-        });
+          const reviewChannel = await client.channels.fetch(REVIEW_CHANNEL_ID);
 
-        const allAnswers = { ...answers1, ...answers2 };
+          const buttonsRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`app_accept_${interaction.user.id}_${roleKey}`)
+              .setLabel("Accept")
+              .setStyle(ButtonStyle.Success),
+            new ButtonBuilder()
+              .setCustomId(`app_deny_${interaction.user.id}_${roleKey}`)
+              .setLabel("Deny")
+              .setStyle(ButtonStyle.Danger)
+          );
 
-        const embed = new EmbedBuilder()
-          .setTitle(`New ${app.label} Application`)
-          .setDescription(`Applicant: <@${interaction.user.id}> (${interaction.user.tag})`)
-          .setColor(0x3498db)
-          .setTimestamp();
-
-        app.questions.forEach((q) => {
-          embed.addFields({ name: q.label, value: allAnswers[q.id]?.slice(0, 1024) || "N/A" });
-        });
-
-        const reviewChannel = await client.channels.fetch(REVIEW_CHANNEL_ID);
-
-        const buttonsRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`app_accept_${interaction.user.id}_${roleKey}`)
-            .setLabel("Accept")
-            .setStyle(ButtonStyle.Success),
-          new ButtonBuilder()
-            .setCustomId(`app_deny_${interaction.user.id}_${roleKey}`)
-            .setLabel("Deny")
-            .setStyle(ButtonStyle.Danger)
-        );
-
-        await reviewChannel.send({ embeds: [embed], components: [buttonsRow] });
-
-        return interaction.reply({
-          content: `✅ Your **${app.label}** application has been submitted! Staff will review it soon.`,
-          ephemeral: true,
-        });
+          await reviewChannel.send({ embeds: [embed], components: [buttonsRow] });
+        } catch (err) {
+          console.error("DM interview error:", err);
+          await dmChannel.send("❌ Something went wrong with your application. Please try again later.").catch(() => {});
+        } finally {
+          activeApplications.delete(interaction.user.id);
+        }
       }
 
       // ---------- BOUTONS : Accept / Deny ----------
-      if (interaction.isButton() && (interaction.customId.startsWith("app_accept_") || interaction.customId.startsWith("app_deny_"))) {
+      if (
+        interaction.isButton() &&
+        (interaction.customId.startsWith("app_accept_") || interaction.customId.startsWith("app_deny_"))
+      ) {
         if (!isStaff(interaction, STAFF_ROLE_ID)) {
-          return interaction.reply({ content: "❌ You don't have permission to review applications.", ephemeral: true });
+          return interaction.reply({
+            content: "❌ You don't have permission to review applications.",
+            flags: MessageFlags.Ephemeral,
+          });
         }
 
         const isAccept = interaction.customId.startsWith("app_accept_");
@@ -364,13 +401,13 @@ async function deployCommands(TOKEN, CLIENT_ID, GUILD_ID) {
               : `Your **${app.label}** application for WestJet has been **denied**. You're welcome to reapply later.`
           );
         } catch {
-          // DM fermés, on ignore
+          // DMs fermés, on ignore
         }
       }
     } catch (err) {
       console.error(err);
       if (interaction.isRepliable()) {
-        const payload = { content: "❌ An error occurred.", ephemeral: true };
+        const payload = { content: "❌ An error occurred.", flags: MessageFlags.Ephemeral };
         if (interaction.deferred || interaction.replied) {
           interaction.followUp(payload).catch(() => {});
         } else {
