@@ -35,8 +35,12 @@ function loadConfig() {
   if (missing.length > 0) {
     throw new Error(`Missing environment variables: ${missing.join(", ")}`);
   }
+  config.LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID || config.REVIEW_CHANNEL_ID;
   return config;
 }
+
+const AGE_QUESTION = "What is your age?";
+const MINIMUM_AGE = 13;
 
 const APPLICATIONS = {
   pilot: {
@@ -44,7 +48,7 @@ const APPLICATIONS = {
     emoji: "✈️",
     questions: [
       "What is your Roblox username?",
-      "What is your age?",
+      AGE_QUESTION,
       "What is your timezone (GMT)?",
       "How many flight hours do you have in PTFS?",
       "What aircraft are you most comfortable flying?",
@@ -67,7 +71,7 @@ const APPLICATIONS = {
     emoji: "🧑‍✈️",
     questions: [
       "What is your Roblox username?",
-      "What is your age?",
+      AGE_QUESTION,
       "What is your timezone (GMT)?",
       "Why do you want to be Cabin Crew?",
       "How would you handle an upset passenger?",
@@ -90,7 +94,7 @@ const APPLICATIONS = {
     emoji: "🛎️",
     questions: [
       "What is your Roblox username?",
-      "What is your age?",
+      AGE_QUESTION,
       "What is your timezone (GMT)?",
       "Why do you want to be a Check-in Agent?",
       "How would you handle a passenger with an invalid ticket/ID?",
@@ -113,7 +117,7 @@ const APPLICATIONS = {
     emoji: "🛡️",
     questions: [
       "What is your Discord username?",
-      "What is your age?",
+      AGE_QUESTION,
       "What is your timezone (GMT)?",
       "Do you have prior moderation experience? Where?",
       "How would you handle a member repeatedly breaking rules?",
@@ -162,34 +166,79 @@ async function runInterview(dmChannel, user, questions, introText, doneText, min
   await dmChannel.send(introText);
 
   for (let i = 0; i < questions.length; i++) {
+    const isAgeQuestion = questions[i] === AGE_QUESTION;
+
     await dmChannel.send(`**Question ${i + 1}/${questions.length}:** ${questions[i]}`);
 
-    const collected = await dmChannel
-      .awaitMessages({
-        filter: (m) => m.author.id === user.id,
-        max: 1,
-        time: minutesPerQuestion * 60 * 1000,
-        errors: ["time"],
-      })
-      .catch(() => null);
+    let reply;
 
-    if (!collected || collected.size === 0) {
-      await dmChannel.send("⏱️ You took too long to respond. Your session has been cancelled.");
-      return null;
-    }
+    while (true) {
+      const collected = await dmChannel
+        .awaitMessages({
+          filter: (m) => m.author.id === user.id,
+          max: 1,
+          time: minutesPerQuestion * 60 * 1000,
+          errors: ["time"],
+        })
+        .catch(() => null);
 
-    const reply = collected.first().content.trim();
+      if (!collected || collected.size === 0) {
+        await dmChannel.send("⏱️ You took too long to respond. Your session has been cancelled.");
+        return { status: "cancelled" };
+      }
 
-    if (reply.toLowerCase() === "cancel") {
-      await dmChannel.send("❌ Session cancelled.");
-      return null;
+      reply = collected.first().content.trim();
+
+      if (reply.toLowerCase() === "cancel") {
+        await dmChannel.send("❌ Session cancelled.");
+        return { status: "cancelled" };
+      }
+
+      if (isAgeQuestion) {
+        const match = reply.match(/\d+/);
+
+        if (!match) {
+          await dmChannel.send("⚠️ Please reply with your age as a number.");
+          continue;
+        }
+
+        const age = parseInt(match[0], 10);
+
+        if (age < MINIMUM_AGE) {
+          await dmChannel.send(
+            "🚫 You are underaged. Come back when you are older.\n" +
+              `Discord's Terms of Service require users to be at least ${MINIMUM_AGE} years old: https://discord.com/terms`
+          );
+          return { status: "underage", age };
+        }
+      }
+
+      break;
     }
 
     answers.push(reply);
   }
 
   await dmChannel.send(doneText);
-  return answers;
+  return { status: "done", answers };
+}
+
+async function logUnderageApplicant(client, logChannelId, user, app, age) {
+  try {
+    const logChannel = await client.channels.fetch(logChannelId);
+    const embed = new EmbedBuilder()
+      .setTitle("Underage Applicant Detected")
+      .setColor(0xe67e22)
+      .addFields(
+        { name: "User", value: `<@${user.id}> (${user.tag})` },
+        { name: "User ID", value: user.id },
+        { name: "Position", value: app.label },
+        { name: "Age Stated", value: String(age) },
+        { name: "Action", value: `Application stopped (Discord ToS minimum age: ${MINIMUM_AGE})` }
+      )
+      .setTimestamp();
+    await logChannel.send({ embeds: [embed] });
+  } catch {}
 }
 
 async function deployCommands(token, clientId, guildId) {
@@ -217,7 +266,7 @@ function reviewButtons(prefix, positive, negative, userId, roleKey) {
 }
 
 (async () => {
-  const { TOKEN, CLIENT_ID, GUILD_ID, STAFF_ROLE_ID, REVIEW_CHANNEL_ID } = loadConfig();
+  const { TOKEN, CLIENT_ID, GUILD_ID, STAFF_ROLE_ID, REVIEW_CHANNEL_ID, LOG_CHANNEL_ID } = loadConfig();
 
   await deployCommands(TOKEN, CLIENT_ID, GUILD_ID).catch(() => {});
 
@@ -282,7 +331,7 @@ function reviewButtons(prefix, positive, negative, userId, roleKey) {
         activeSessions.add(interaction.user.id);
 
         try {
-          const answers = await runInterview(
+          const result = await runInterview(
             dmChannel,
             interaction.user,
             app.questions,
@@ -292,7 +341,13 @@ function reviewButtons(prefix, positive, negative, userId, roleKey) {
             "✅ All done! Your application has been submitted for review. Good luck!",
             10
           );
-          if (!answers) return;
+
+          if (result.status === "underage") {
+            await logUnderageApplicant(client, LOG_CHANNEL_ID, interaction.user, app, result.age);
+            return;
+          }
+
+          if (result.status !== "done") return;
 
           const embed = new EmbedBuilder()
             .setTitle(`New ${app.label} Application`)
@@ -301,7 +356,7 @@ function reviewButtons(prefix, positive, negative, userId, roleKey) {
             .setTimestamp();
 
           app.questions.forEach((question, i) => {
-            embed.addFields({ name: question, value: answers[i]?.slice(0, 400) || "N/A" });
+            embed.addFields({ name: question, value: result.answers[i]?.slice(0, 400) || "N/A" });
           });
 
           const reviewChannel = await client.channels.fetch(REVIEW_CHANNEL_ID);
@@ -394,7 +449,7 @@ function reviewButtons(prefix, positive, negative, userId, roleKey) {
           activeSessions.add(userId);
 
           try {
-            const answers = await runInterview(
+            const result = await runInterview(
               dmChannel,
               interaction.user,
               app.trial,
@@ -404,7 +459,8 @@ function reviewButtons(prefix, positive, negative, userId, roleKey) {
               "✅ Trial complete! Your answers have been sent to the staff team for review. Good luck!",
               15
             );
-            if (!answers) return;
+
+            if (result.status !== "done") return;
 
             const embed = new EmbedBuilder()
               .setTitle(`${app.label} Trial Submission`)
@@ -413,7 +469,7 @@ function reviewButtons(prefix, positive, negative, userId, roleKey) {
               .setTimestamp();
 
             app.trial.forEach((question, i) => {
-              embed.addFields({ name: question.slice(0, 256), value: answers[i]?.slice(0, 800) || "N/A" });
+              embed.addFields({ name: question.slice(0, 256), value: result.answers[i]?.slice(0, 800) || "N/A" });
             });
 
             const reviewChannel = await client.channels.fetch(REVIEW_CHANNEL_ID);
