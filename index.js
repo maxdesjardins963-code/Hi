@@ -1,37 +1,3 @@
-/**
- * ========================================================
- *   WESTJET APPLICATIONS BOT - index.js (discord.js v14)
- *   Version DM : le bot pose les 10 questions une par une
- *   directement en message privé.
- * ========================================================
- *
- * Flow :
- * 1. Le membre clique sur un poste dans le panel (menu déroulant)
- * 2. Le bot lui envoie un DM et pose les 10 questions, une par une
- *    (il attend la réponse avant de poser la suivante)
- * 3. Une fois terminé, la candidature est postée dans le channel
- *    de review avec les boutons Accept / Deny
- * 4. Le candidat reçoit un DM avec la décision finale
- *
- * ========================================================
- *   VARIABLES D'ENVIRONNEMENT REQUISES
- * ========================================================
- *   TOKEN               -> Bot Token
- *   CLIENT_ID           -> Application ID
- *   GUILD_ID            -> ID de ton serveur WestJet
- *   STAFF_ROLE_ID        -> ID du rôle autorisé à review les candidatures
- *   REVIEW_CHANNEL_ID    -> ID du channel où les candidatures sont postées
- *
- * ========================================================
- *   INSTALLATION
- * ========================================================
- * 1. Build Command : npm install
- * 2. Start Command : node index.js
- * 3. Ajoute les variables d'environnement ci-dessus
- * 4. Une fois le bot en ligne, fais /applypanel dans le channel voulu
- * ========================================================
- */
-
 const {
   Client,
   GatewayIntentBits,
@@ -50,44 +16,28 @@ const {
 } = require("discord.js");
 const http = require("http");
 
-// ============== SERVEUR HTTP FACTICE (pour Render) ==============
-const PORT = process.env.PORT || 3000;
 http
   .createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("WestJet Applications Bot is running.");
   })
-  .listen(PORT, () => {
-    console.log(`🌐 Dummy HTTP server listening on port ${PORT} (for Render)`);
-  });
+  .listen(process.env.PORT || 3000);
 
-// ============== CONFIGURATION (variables d'environnement) ==============
 function loadConfig() {
-  const TOKEN = process.env.TOKEN;
-  const CLIENT_ID = process.env.CLIENT_ID;
-  const GUILD_ID = process.env.GUILD_ID;
-  const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
-  const REVIEW_CHANNEL_ID = process.env.REVIEW_CHANNEL_ID;
-
-  const missing = [];
-  if (!TOKEN) missing.push("TOKEN");
-  if (!CLIENT_ID) missing.push("CLIENT_ID");
-  if (!GUILD_ID) missing.push("GUILD_ID");
-  if (!STAFF_ROLE_ID) missing.push("STAFF_ROLE_ID");
-  if (!REVIEW_CHANNEL_ID) missing.push("REVIEW_CHANNEL_ID");
-
+  const config = {
+    TOKEN: process.env.TOKEN,
+    CLIENT_ID: process.env.CLIENT_ID,
+    GUILD_ID: process.env.GUILD_ID,
+    STAFF_ROLE_ID: process.env.STAFF_ROLE_ID,
+    REVIEW_CHANNEL_ID: process.env.REVIEW_CHANNEL_ID,
+  };
+  const missing = Object.keys(config).filter((key) => !config[key]);
   if (missing.length > 0) {
-    console.error("========================================");
-    console.error("❌ Variables d'environnement manquantes :");
-    missing.forEach((m) => console.error(`   - ${m}`));
-    console.error("========================================");
-    process.exit(1);
+    throw new Error(`Missing environment variables: ${missing.join(", ")}`);
   }
-
-  return { TOKEN, CLIENT_ID, GUILD_ID, STAFF_ROLE_ID, REVIEW_CHANNEL_ID };
+  return config;
 }
 
-// ============== DÉFINITION DES POSTES / QUESTIONS ==============
 const APPLICATIONS = {
   pilot: {
     label: "Pilot",
@@ -103,6 +53,13 @@ const APPLICATIONS = {
       "How many hours per week can you fly for WestJet?",
       "Do you have prior aviation experience in other servers?",
       "Why do you want to join WestJet as a pilot?",
+    ],
+    trial: [
+      "Walk me through your full departure procedure, from pushback to takeoff.",
+      "You lose an engine right after V1. Describe your exact actions and communications.",
+      "Explain how you decide on and execute a go-around after an unstable approach.",
+      "How do you manage sequencing and separation with ATC at a busy airport?",
+      "Cabin crew reports a passenger emergency mid-flight and requests a diversion. How do you decide and act?",
     ],
   },
   cabincrew: {
@@ -120,6 +77,13 @@ const APPLICATIONS = {
       "Describe your communication / customer service skills.",
       "Are you comfortable communicating in English?",
     ],
+    trial: [
+      "Write out a full pre-departure safety announcement exactly as you would deliver it.",
+      "Sudden turbulence hits during the service. What do you do and say?",
+      "A passenger refuses to follow safety instructions during boarding. How do you escalate?",
+      "Describe how you coordinate with the flight deck during an emergency evacuation.",
+      "A passenger suffers a medical emergency on board. Walk me through your response step by step.",
+    ],
   },
   checkin: {
     label: "Check-in Agent",
@@ -136,21 +100,12 @@ const APPLICATIONS = {
       "How do you handle multitasking during busy periods?",
       "Give an example that shows you're patient and detail-oriented.",
     ],
-  },
-  atc: {
-    label: "ATC",
-    emoji: "🗼",
-    questions: [
-      "What is your Roblox username?",
-      "What is your age?",
-      "What is your timezone (GMT)?",
-      "Do you have prior ATC experience? Where?",
-      "Are you familiar with standard ATC phraseology?",
-      "Two aircraft request the same runway at once — what do you do?",
-      "How many hours per week can you be active as ATC?",
-      "Rate your ATC knowledge from 1-10 and explain.",
-      "Describe how you'd handle a pilot declaring an emergency.",
-      "Why do you want to join the WestJet ATC team?",
+    trial: [
+      "Write out a complete check-in interaction, from greeting to handing over the boarding pass.",
+      "A passenger arrives just before check-in closes. What do you do?",
+      "Two passengers claim the same seat. How do you resolve it?",
+      "A passenger's bag is overweight and they refuse to pay. How do you handle it?",
+      "A flight is delayed by two hours. How do you coordinate with gate agents and the crew, and what do you tell passengers?",
     ],
   },
   moderator: {
@@ -168,15 +123,22 @@ const APPLICATIONS = {
       "Why do you want to be a Server Moderator for WestJet?",
       "Describe a difficult moderation decision you've had to make.",
     ],
+    trial: [
+      "A staff member is abusing their permissions. What do you do?",
+      "The server is hit by a raid with mass spam. Walk me through your response.",
+      "An argument in public chat escalates and one member starts doxxing another. What are your steps?",
+      "A member says their punishment was unfair and threatens to leave with others. How do you respond?",
+      "What would you change in a typical server moderation system to make it more effective?",
+    ],
   },
 };
 
-// Empêche un membre de démarrer 2 candidatures en même temps
-const activeApplications = new Set();
+const activeSessions = new Set();
 
-function isStaff(interaction, STAFF_ROLE_ID) {
+function isStaff(interaction, staffRoleId) {
+  if (!interaction.member) return false;
   if (interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return true;
-  return interaction.member.roles.cache.has(STAFF_ROLE_ID);
+  return interaction.member.roles.cache.has(staffRoleId);
 }
 
 function buildPanelRow() {
@@ -185,98 +147,87 @@ function buildPanelRow() {
       .setCustomId("apply_select_role")
       .setPlaceholder("Select a position to apply for")
       .addOptions(
-        Object.entries(APPLICATIONS).map(([key, val]) => ({
-          label: val.label,
+        Object.entries(APPLICATIONS).map(([key, value]) => ({
+          label: value.label,
           value: key,
-          emoji: val.emoji,
+          emoji: value.emoji,
         }))
       )
   );
 }
 
-// Pose les questions une par une en DM et renvoie les réponses,
-// ou null si le membre n'a pas répondu à temps / a annulé.
-async function runDmInterview(dmChannel, user, app) {
+async function runInterview(dmChannel, user, questions, introText, doneText, minutesPerQuestion) {
   const answers = [];
 
-  await dmChannel.send(
-    `👋 Hey ${user.username}! Let's start your **${app.label}** application for WestJet.\n` +
-      `I'll ask you ${app.questions.length} questions, one at a time. Just reply in this DM.\n` +
-      `You have 10 minutes per question. Type **cancel** anytime to stop.`
-  );
+  await dmChannel.send(introText);
 
-  for (let i = 0; i < app.questions.length; i++) {
-    await dmChannel.send(`**Question ${i + 1}/${app.questions.length}:** ${app.questions[i]}`);
+  for (let i = 0; i < questions.length; i++) {
+    await dmChannel.send(`**Question ${i + 1}/${questions.length}:** ${questions[i]}`);
 
     const collected = await dmChannel
       .awaitMessages({
         filter: (m) => m.author.id === user.id,
         max: 1,
-        time: 10 * 60 * 1000,
+        time: minutesPerQuestion * 60 * 1000,
         errors: ["time"],
       })
       .catch(() => null);
 
     if (!collected || collected.size === 0) {
-      await dmChannel.send("⏱️ You took too long to respond. Application cancelled — feel free to start again.");
+      await dmChannel.send("⏱️ You took too long to respond. Your session has been cancelled.");
       return null;
     }
 
     const reply = collected.first().content.trim();
 
     if (reply.toLowerCase() === "cancel") {
-      await dmChannel.send("❌ Application cancelled.");
+      await dmChannel.send("❌ Session cancelled.");
       return null;
     }
 
     answers.push(reply);
   }
 
-  await dmChannel.send("✅ All done! Your application has been submitted for review. Good luck!");
+  await dmChannel.send(doneText);
   return answers;
 }
 
-// ============== DÉPLOIEMENT DES SLASH COMMANDS ==============
-async function deployCommands(TOKEN, CLIENT_ID, GUILD_ID) {
+async function deployCommands(token, clientId, guildId) {
   const commands = [
     new SlashCommandBuilder()
       .setName("applypanel")
       .setDescription("Post the WestJet applications panel (staff only)"),
-  ].map((c) => c.toJSON());
+  ].map((command) => command.toJSON());
 
-  const rest = new REST({ version: "10" }).setToken(TOKEN);
-  console.log("⏳ Déploiement des slash commands...");
-  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-  console.log("✅ Slash commands déployées.\n");
+  const rest = new REST({ version: "10" }).setToken(token);
+  await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands });
 }
 
-// ============== DÉMARRAGE ==============
+function reviewButtons(prefix, positive, negative, userId, roleKey) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${prefix}_${positive.id}_${userId}_${roleKey}`)
+      .setLabel(positive.label)
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`${prefix}_${negative.id}_${userId}_${roleKey}`)
+      .setLabel(negative.label)
+      .setStyle(ButtonStyle.Danger)
+  );
+}
+
 (async () => {
   const { TOKEN, CLIENT_ID, GUILD_ID, STAFF_ROLE_ID, REVIEW_CHANNEL_ID } = loadConfig();
 
-  try {
-    await deployCommands(TOKEN, CLIENT_ID, GUILD_ID);
-  } catch (err) {
-    console.error("❌ Erreur lors du déploiement des commandes :", err.message);
-  }
+  await deployCommands(TOKEN, CLIENT_ID, GUILD_ID).catch(() => {});
 
   const client = new Client({
-    intents: [
-      GatewayIntentBits.Guilds,
-      GatewayIntentBits.GuildMembers,
-      GatewayIntentBits.DirectMessages,
-      GatewayIntentBits.MessageContent,
-    ],
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages, GatewayIntentBits.MessageContent],
     partials: [Partials.Channel, Partials.Message],
-  });
-
-  client.once(Events.ClientReady, (c) => {
-    console.log(`✅ Logged in as ${c.user.tag} - WestJet Applications Bot ready.`);
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
     try {
-      // ---------- /applypanel ----------
       if (interaction.isChatInputCommand() && interaction.commandName === "applypanel") {
         if (!isStaff(interaction, STAFF_ROLE_ID)) {
           return interaction.reply({
@@ -289,8 +240,9 @@ async function deployCommands(TOKEN, CLIENT_ID, GUILD_ID) {
           .setTitle("WestJet Applications")
           .setDescription(
             "Interested in joining the WestJet team? Select a position below.\n\n" +
-              "✈️ **Pilot**\n🧑‍✈️ **Cabin Crew**\n🛎️ **Check-in Agent**\n🗼 **ATC**\n🛡️ **Server Moderator**\n\n" +
-              "The bot will DM you 10 questions, one at a time. Make sure your DMs are open!"
+              "✈️ **Pilot**\n🧑‍✈️ **Cabin Crew**\n🛎️ **Check-in Agent**\n🛡️ **Server Moderator**\n\n" +
+              "The bot will DM you 10 questions, one at a time. Make sure your DMs are open!\n" +
+              "If you are accepted, you will receive a trial with 5 advanced questions."
           )
           .setColor(0x1abc9c)
           .setFooter({ text: "WestJet | Applications" });
@@ -299,15 +251,14 @@ async function deployCommands(TOKEN, CLIENT_ID, GUILD_ID) {
         return interaction.reply({ content: "✅ Panel posted.", flags: MessageFlags.Ephemeral });
       }
 
-      // ---------- SELECT MENU : choix du poste ----------
       if (interaction.isStringSelectMenu() && interaction.customId === "apply_select_role") {
         const roleKey = interaction.values[0];
         const app = APPLICATIONS[roleKey];
         if (!app) return;
 
-        if (activeApplications.has(interaction.user.id)) {
+        if (activeSessions.has(interaction.user.id)) {
           return interaction.reply({
-            content: "⚠️ You already have an application in progress. Check your DMs.",
+            content: "⚠️ You already have a session in progress. Check your DMs.",
             flags: MessageFlags.Ephemeral,
           });
         }
@@ -324,15 +275,24 @@ async function deployCommands(TOKEN, CLIENT_ID, GUILD_ID) {
         }
 
         await interaction.reply({
-          content: `📩 Check your DMs — I've started your **${app.label}** application!`,
+          content: `📩 Check your DMs, your **${app.label}** application has started!`,
           flags: MessageFlags.Ephemeral,
         });
 
-        activeApplications.add(interaction.user.id);
+        activeSessions.add(interaction.user.id);
 
         try {
-          const answers = await runDmInterview(dmChannel, interaction.user, app);
-          if (!answers) return; // annulé / timeout
+          const answers = await runInterview(
+            dmChannel,
+            interaction.user,
+            app.questions,
+            `👋 Hey ${interaction.user.username}! Let's start your **${app.label}** application for WestJet.\n` +
+              `I'll ask you ${app.questions.length} questions, one at a time. Just reply in this DM.\n` +
+              `You have 10 minutes per question. Type **cancel** anytime to stop.`,
+            "✅ All done! Your application has been submitted for review. Good luck!",
+            10
+          );
+          if (!answers) return;
 
           const embed = new EmbedBuilder()
             .setTitle(`New ${app.label} Application`)
@@ -340,72 +300,172 @@ async function deployCommands(TOKEN, CLIENT_ID, GUILD_ID) {
             .setColor(0x3498db)
             .setTimestamp();
 
-          app.questions.forEach((q, i) => {
-            embed.addFields({ name: q, value: answers[i]?.slice(0, 1024) || "N/A" });
+          app.questions.forEach((question, i) => {
+            embed.addFields({ name: question, value: answers[i]?.slice(0, 400) || "N/A" });
           });
 
           const reviewChannel = await client.channels.fetch(REVIEW_CHANNEL_ID);
-
-          const buttonsRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setCustomId(`app_accept_${interaction.user.id}_${roleKey}`)
-              .setLabel("Accept")
-              .setStyle(ButtonStyle.Success),
-            new ButtonBuilder()
-              .setCustomId(`app_deny_${interaction.user.id}_${roleKey}`)
-              .setLabel("Deny")
-              .setStyle(ButtonStyle.Danger)
-          );
-
-          await reviewChannel.send({ embeds: [embed], components: [buttonsRow] });
-        } catch (err) {
-          console.error("DM interview error:", err);
+          await reviewChannel.send({
+            embeds: [embed],
+            components: [
+              reviewButtons(
+                "app",
+                { id: "accept", label: "Accept" },
+                { id: "deny", label: "Deny" },
+                interaction.user.id,
+                roleKey
+              ),
+            ],
+          });
+        } catch {
           await dmChannel.send("❌ Something went wrong with your application. Please try again later.").catch(() => {});
         } finally {
-          activeApplications.delete(interaction.user.id);
+          activeSessions.delete(interaction.user.id);
         }
+        return;
       }
 
-      // ---------- BOUTONS : Accept / Deny ----------
-      if (
-        interaction.isButton() &&
-        (interaction.customId.startsWith("app_accept_") || interaction.customId.startsWith("app_deny_"))
-      ) {
-        if (!isStaff(interaction, STAFF_ROLE_ID)) {
-          return interaction.reply({
-            content: "❌ You don't have permission to review applications.",
-            flags: MessageFlags.Ephemeral,
-          });
-        }
-
-        const isAccept = interaction.customId.startsWith("app_accept_");
-        const rest = interaction.customId.replace(isAccept ? "app_accept_" : "app_deny_", "");
-        const [applicantId, roleKey] = rest.split("_");
+      if (interaction.isButton()) {
+        const [prefix, action, userId, roleKey] = interaction.customId.split("_");
         const app = APPLICATIONS[roleKey];
 
-        const originalEmbed = interaction.message.embeds[0];
-        const updatedEmbed = EmbedBuilder.from(originalEmbed)
-          .setColor(isAccept ? 0x2ecc71 : 0xe74c3c)
-          .addFields({
-            name: "Decision",
-            value: `${isAccept ? "✅ Accepted" : "❌ Denied"} by <@${interaction.user.id}>`,
-          });
+        if (prefix === "app" && (action === "accept" || action === "deny") && app) {
+          if (!isStaff(interaction, STAFF_ROLE_ID)) {
+            return interaction.reply({
+              content: "❌ You don't have permission to review applications.",
+              flags: MessageFlags.Ephemeral,
+            });
+          }
 
-        await interaction.update({ embeds: [updatedEmbed], components: [] });
+          const accepted = action === "accept";
+          const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
+            .setColor(accepted ? 0x2ecc71 : 0xe74c3c)
+            .addFields({
+              name: "Decision",
+              value: `${accepted ? "✅ Accepted" : "❌ Denied"} by <@${interaction.user.id}>`,
+            });
 
-        try {
-          const applicant = await client.users.fetch(applicantId);
-          await applicant.send(
-            isAccept
-              ? `🎉 Congratulations! Your **${app.label}** application for WestJet has been **accepted**.`
-              : `Your **${app.label}** application for WestJet has been **denied**. You're welcome to reapply later.`
-          );
-        } catch {
-          // DMs fermés, on ignore
+          await interaction.update({ embeds: [updatedEmbed], components: [] });
+
+          try {
+            const applicant = await client.users.fetch(userId);
+            if (accepted) {
+              await applicant.send({
+                content:
+                  `🎉 Congratulations! Your **${app.label}** application for WestJet has been **accepted**.\n` +
+                  `The next step is your trial: 5 advanced questions. Click the button below when you're ready.`,
+                components: [
+                  new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                      .setCustomId(`trialstart_begin_${userId}_${roleKey}`)
+                      .setLabel("Start Your Trial")
+                      .setStyle(ButtonStyle.Primary)
+                      .setEmoji("🚀")
+                  ),
+                ],
+              });
+            } else {
+              await applicant.send(
+                `Your **${app.label}** application for WestJet has been **denied**. You're welcome to reapply later.`
+              );
+            }
+          } catch {}
+          return;
+        }
+
+        if (prefix === "trialstart" && action === "begin" && app) {
+          if (interaction.user.id !== userId) {
+            return interaction.reply({
+              content: "❌ This trial is not for you.",
+              flags: MessageFlags.Ephemeral,
+            });
+          }
+
+          if (activeSessions.has(userId)) {
+            return interaction.reply({
+              content: "⚠️ You already have a session in progress.",
+              flags: MessageFlags.Ephemeral,
+            });
+          }
+
+          await interaction.update({ components: [] });
+
+          const dmChannel = interaction.channel ?? (await interaction.user.createDM());
+          activeSessions.add(userId);
+
+          try {
+            const answers = await runInterview(
+              dmChannel,
+              interaction.user,
+              app.trial,
+              `🚀 Welcome to your **${app.label}** trial, ${interaction.user.username}!\n` +
+                `You will get ${app.trial.length} advanced questions, one at a time. Be detailed and realistic.\n` +
+                `You have 15 minutes per question. Type **cancel** anytime to stop.`,
+              "✅ Trial complete! Your answers have been sent to the staff team for review. Good luck!",
+              15
+            );
+            if (!answers) return;
+
+            const embed = new EmbedBuilder()
+              .setTitle(`${app.label} Trial Submission`)
+              .setDescription(`Applicant: <@${userId}> (${interaction.user.tag})`)
+              .setColor(0x9b59b6)
+              .setTimestamp();
+
+            app.trial.forEach((question, i) => {
+              embed.addFields({ name: question.slice(0, 256), value: answers[i]?.slice(0, 800) || "N/A" });
+            });
+
+            const reviewChannel = await client.channels.fetch(REVIEW_CHANNEL_ID);
+            await reviewChannel.send({
+              embeds: [embed],
+              components: [
+                reviewButtons(
+                  "trial",
+                  { id: "pass", label: "Pass" },
+                  { id: "fail", label: "Fail" },
+                  userId,
+                  roleKey
+                ),
+              ],
+            });
+          } catch {
+            await dmChannel.send("❌ Something went wrong with your trial. Please contact a staff member.").catch(() => {});
+          } finally {
+            activeSessions.delete(userId);
+          }
+          return;
+        }
+
+        if (prefix === "trial" && (action === "pass" || action === "fail") && app) {
+          if (!isStaff(interaction, STAFF_ROLE_ID)) {
+            return interaction.reply({
+              content: "❌ You don't have permission to review trials.",
+              flags: MessageFlags.Ephemeral,
+            });
+          }
+
+          const passed = action === "pass";
+          const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
+            .setColor(passed ? 0x2ecc71 : 0xe74c3c)
+            .addFields({
+              name: "Decision",
+              value: `${passed ? "✅ Passed" : "❌ Failed"} by <@${interaction.user.id}>`,
+            });
+
+          await interaction.update({ embeds: [updatedEmbed], components: [] });
+
+          try {
+            const applicant = await client.users.fetch(userId);
+            await applicant.send(
+              passed
+                ? `🎉 Congratulations! You passed your trial and you are now officially a WestJet **${app.label}**. Welcome to the team!`
+                : `Unfortunately, you did not pass your **${app.label}** trial for WestJet. You're welcome to apply again later.`
+            );
+          } catch {}
         }
       }
-    } catch (err) {
-      console.error(err);
+    } catch {
       if (interaction.isRepliable()) {
         const payload = { content: "❌ An error occurred.", flags: MessageFlags.Ephemeral };
         if (interaction.deferred || interaction.replied) {
